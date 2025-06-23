@@ -6,7 +6,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import heapq
 import multiprocessing
+import time
 from functools import partial
+
 
 # ─── Insert below your existing imports ────────────────────────────────────────
 
@@ -68,7 +70,7 @@ GRID_SIZE = 29
 CELL_SIZE = 29
 WIDTH, HEIGHT = GRID_SIZE * CELL_SIZE, GRID_SIZE * CELL_SIZE
 TOTAL_CELLS = GRID_SIZE * GRID_SIZE
-NUM_AGENTS = 15
+NUM_AGENTS = 19
 COST_MOVE = 1
 BASE_COST_SAND = 5
 BASE_COST_PIT_FILL = 2
@@ -756,8 +758,9 @@ class Agent:
 
 def run_simulation(obstacle_density, headless=True):
     """Run a single simulation with given parameters"""
-    pygame.init()
+    
     if not headless:
+        pygame.init()
         screen = pygame.display.set_mode((WIDTH, HEIGHT))
         pygame.display.set_caption("Multi-Agent Pathfinding Simulation")
         clock = pygame.time.Clock()
@@ -910,19 +913,29 @@ def main():
     
     if args.mode == 'visual':
         logger.info("Running visual simulation...")
+        start = time.time()
         result = run_simulation(args.density, headless=False)
+        elapsed = time.time() - start
+        print(f"[MAIN] run_simulation took {elapsed:.2f}s")
         if result:
             logger.info(f"Simulation completed: {result}")
     
     elif args.mode == 'single':
+        
         logger.info(f"Running single simulation with density {args.density}...")
+        start = time.time()
         result = run_simulation(args.density, headless=True)
+        elapsed = time.time() - start
+        print(f"[MAIN] run_simulation took {elapsed:.2f}s")
         if result:
             logger.info(f"Results: {result}")
     
     elif args.mode == 'batch':
         logger.info(f"Running batch simulations ({args.runs} runs per density)...")
-        results = run_batch_simulations(args.runs)
+        start = time.time()
+        results = run_simulation(args.density, headless=False)
+        elapsed = time.time() - start
+        print(f"[MAIN] run_simulation took {elapsed:.2f}s")
         
         # Print summary
         logger.info("\n" + "="*80)
@@ -939,7 +952,7 @@ def main():
                        f"{result['avg_total_steps']:<10.1f}")
         
         # Create plots
-        plot_results(results)
+        #plot_results(results)
         
         # Save results to file
         import json
