@@ -19,11 +19,19 @@ def move(loc, dir):
     directions = [(0, -1), (1, 0), (0, 1), (-1, 0), (0, 0)]
     return loc[0] + directions[dir][0], loc[1] + directions[dir][1]
 
+def manhattan_distance(pos1, pos2):
+    """Calculate Manhattan distance between two positions"""
+    return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
+
 def compute_heuristics_with_env(my_map, goal, env_manager=None):
     """
     Enhanced heuristic computation that considers environment modifications
     Uses Dijkstra to build shortest-path tree considering potential pit filling
     """
+    # Convert goal to tuple if it's a list
+    if isinstance(goal, list):
+        goal = tuple(goal)
+    
     open_list = []
     closed_list = dict()
     root = {'loc': goal, 'cost': 0}
@@ -101,6 +109,126 @@ def get_path(goal_node, meta_agent):
 
     assert path is not None
     return path
+
+class Sandbag:
+    """Represents a sandbag in the environment"""
+    
+    def __init__(self, position, move_cost=2.0, assigned_agent=None):
+        self.position = tuple(position) if isinstance(position, list) else position
+        self.move_cost = move_cost
+        self.assigned_agent = assigned_agent
+        self.is_filled = False  # Whether it's used to fill a pit
+        
+    def assign_to_agent(self, agent_id):
+        """Assign sandbag to an agent"""
+        self.assigned_agent = agent_id
+        
+    def move_to(self, new_position):
+        """Move sandbag to new position"""
+        self.position = tuple(new_position) if isinstance(new_position, list) else new_position
+        
+    def fill_pit(self):
+        """Mark sandbag as used to fill a pit"""
+        self.is_filled = True
+
+class Pit:
+    """Represents a pit in the environment"""
+    
+    def __init__(self, position, is_filled=False):
+        self.position = tuple(position) if isinstance(position, list) else position
+        self.is_filled = is_filled
+        self.filled_by_sandbag = None
+        
+    def fill_with_sandbag(self, sandbag):
+        """Fill pit with a sandbag"""
+        self.is_filled = True
+        self.filled_by_sandbag = sandbag
+        sandbag.fill_pit()
+
+class EnvironmentManager:
+    """Manages dynamic environment elements like pits and sandbags"""
+    
+    def __init__(self, my_map):
+        self.my_map = my_map
+        self.pits = {}  # position -> Pit object
+        self.sandbags = {}  # position -> Sandbag object
+        self.original_map = copy.deepcopy(my_map)
+        
+    def add_pit(self, position):
+        """Add a pit at given position"""
+        pos = tuple(position) if isinstance(position, list) else position
+        self.pits[pos] = Pit(pos)
+        if 0 <= pos[0] < len(self.my_map) and 0 <= pos[1] < len(self.my_map[0]):
+            self.my_map[pos[0]][pos[1]] = True  # Mark as obstacle
+            
+    def add_sandbag(self, position, move_cost=2.0, assigned_agent=None):
+        """Add a sandbag at given position"""
+        pos = tuple(position) if isinstance(position, list) else position
+        self.sandbags[pos] = Sandbag(pos, move_cost, assigned_agent)
+        
+    def is_pit_at(self, position):
+        """Check if there's a pit at given position"""
+        pos = tuple(position) if isinstance(position, list) else position
+        return pos in self.pits and not self.pits[pos].is_filled
+        
+    def is_sandbag_at(self, position):
+        """Check if there's a sandbag at given position"""
+        pos = tuple(position) if isinstance(position, list) else position
+        return pos in self.sandbags and not self.sandbags[pos].is_filled
+        
+    def get_sandbag_at(self, position):
+        """Get sandbag at given position"""
+        pos = tuple(position) if isinstance(position, list) else position
+        return self.sandbags.get(pos)
+        
+    def get_pit_at(self, position):
+        """Get pit at given position"""
+        pos = tuple(position) if isinstance(position, list) else position
+        return self.pits.get(pos)
+        
+    def move_sandbag(self, from_pos, to_pos, agent_id):
+        """Move sandbag from one position to another"""
+        from_pos = tuple(from_pos) if isinstance(from_pos, list) else from_pos
+        to_pos = tuple(to_pos) if isinstance(to_pos, list) else to_pos
+        
+        if from_pos in self.sandbags:
+            sandbag = self.sandbags[from_pos]
+            if sandbag.assigned_agent == agent_id:
+                del self.sandbags[from_pos]
+                sandbag.move_to(to_pos)
+                self.sandbags[to_pos] = sandbag
+                return True
+        return False
+        
+    def fill_pit_with_sandbag(self, pit_pos, sandbag_pos, agent_id):
+        """Fill a pit with a sandbag"""
+        pit_pos = tuple(pit_pos) if isinstance(pit_pos, list) else pit_pos
+        sandbag_pos = tuple(sandbag_pos) if isinstance(sandbag_pos, list) else sandbag_pos
+        
+        if (pit_pos in self.pits and sandbag_pos in self.sandbags and 
+            self.sandbags[sandbag_pos].assigned_agent == agent_id):
+            
+            pit = self.pits[pit_pos]
+            sandbag = self.sandbags[sandbag_pos]
+            
+            pit.fill_with_sandbag(sandbag)
+            del self.sandbags[sandbag_pos]
+            
+            # Update map to make pit traversable
+            if 0 <= pit_pos[0] < len(self.my_map) and 0 <= pit_pos[1] < len(self.my_map[0]):
+                self.my_map[pit_pos[0]][pit_pos[1]] = False
+                
+            return True
+        return False
+        
+    def reset_environment(self):
+        """Reset environment to original state"""
+        self.my_map = copy.deepcopy(self.original_map)
+        for pit in self.pits.values():
+            pit.is_filled = False
+            pit.filled_by_sandbag = None
+        for sandbag in self.sandbags.values():
+            sandbag.is_filled = False
 
 class EnhancedAStar(object):
     """Enhanced A* with environment awareness and sandbag handling"""
@@ -305,8 +433,11 @@ class EnhancedAStar(object):
             if invalid_move:
                 continue
 
-            # find h_values for current moves
-            h_value = sum([self.heuristics[i][child_loc[i]] for i in range(len(self.agents))])
+            # find h_values for current moves - convert to tuples for hashing
+            h_value = 0
+            for i in range(len(self.agents)):
+                child_pos = tuple(child_loc[i]) if isinstance(child_loc[i], list) else child_loc[i]
+                h_value += self.heuristics[i][child_pos]
 
             # Calculate g_value considering movement costs
             num_moves = curr['reached_goal'].count(False)
@@ -348,7 +479,11 @@ class EnhancedAStar(object):
             if table_i.keys():
                 self.max_constraints[i] = max(table_i.keys())
 
-        h_value = sum([self.heuristics[i][self.starts[i]] for i in range(len(self.agents))])
+        # Convert starts and goals to tuples for hashing
+        starts_tuples = [tuple(start) if isinstance(start, list) else start for start in self.starts]
+        goals_tuples = [tuple(goal) if isinstance(goal, list) else goal for goal in self.goals]
+
+        h_value = sum([self.heuristics[i][starts_tuples[i]] for i in range(len(self.agents))])
 
         root = {'loc': [self.starts[j] for j in range(len(self.agents))],
                 'g_val': 0, 
@@ -360,14 +495,14 @@ class EnhancedAStar(object):
 
         # check if any any agents are already at goal loc
         for i, a in enumerate(self.agents):
-            if root['loc'][i] == self.goals[i]:
+            if self.starts[i] == self.goals[i]:
                 if root['timestep'] <= self.max_constraints[i]:
-                    if not self.future_constraint_violated(root['loc'][i], root['timestep'], self.max_constraints[i] ,self.c_table[i], self.agents[i]):
+                    if not self.future_constraint_violated(self.starts[i], root['timestep'], self.max_constraints[i] ,self.c_table[i], self.agents[i]):
                         root['reached_goal'][i] = True
                         self.max_constraints[i] = 0
 
         self.push_node(root)
-        self.closed_list[(tuple(root['loc']),root['timestep'])] = root
+        self.closed_list[(tuple(tuple(pos) for pos in root['loc']),root['timestep'])] = root
 
         while len(self.open_list) > 0:
             curr = self.pop_node()
@@ -375,25 +510,104 @@ class EnhancedAStar(object):
             solution_found = all(curr['reached_goal'][i] for i in range(len(self.agents)))
 
             if solution_found:
+                self.CPU_time = timer.time() - self.start_time
                 return get_path(curr, self.agents)
 
             children = self.generate_child_nodes(curr)
 
             for child in children:
-                if (tuple(child['loc']),child['timestep']) in self.closed_list:
-                    existing = self.closed_list[(tuple(child['loc']),child['timestep'])]
+                # Create hashable key for child location
+                child_key = (tuple(tuple(pos) for pos in child['loc']), child['timestep'])
+                
+                if child_key in self.closed_list:
+                    existing = self.closed_list[child_key]
                     if (child['g_val'] + child['h_val'] < existing['g_val'] + existing['h_val']) and (child['g_val'] < existing['g_val']) and child['reached_goal'].count(False) <= existing['reached_goal'].count(False):
-                        self.closed_list[(tuple(child['loc']),child['timestep'])] = child
+                        self.closed_list[child_key] = child
                         self.push_node(child)
                 else:
-                    self.closed_list[(tuple(child['loc']),child['timestep'])] = child
+                    self.closed_list[child_key] = child
                     self.push_node(child)
 
+        self.CPU_time = timer.time() - self.start_time
         print('No solution found')
         return None
+
+    def get_statistics(self):
+        """Get search statistics"""
+        return {
+            'expanded': self.num_expanded,
+            'generated': self.num_generated,
+            'cpu_time': self.CPU_time
+        }
 
 # Backward compatibility - use enhanced A* but maintain original interface
 class A_Star(EnhancedAStar):
     """Backward compatible A* class"""
     def __init__(self, my_map, starts, goals, heuristics, agents, constraints):
         super().__init__(my_map, starts, goals, heuristics, agents, constraints, env_manager=None)
+
+def create_environment_manager(my_map, pits=None, sandbags=None):
+    """
+    Utility function to create an EnvironmentManager with initial pits and sandbags
+    
+    Args:
+        my_map: The grid map
+        pits: List of pit positions [(row, col), ...]
+        sandbags: List of dictionaries with sandbag info [{'pos': (row, col), 'cost': float, 'agent': int}, ...]
+    
+    Returns:
+        EnvironmentManager instance
+    """
+    env_manager = EnvironmentManager(my_map)
+    
+    if pits:
+        for pit_pos in pits:
+            env_manager.add_pit(pit_pos)
+    
+    if sandbags:
+        for sandbag_info in sandbags:
+            pos = sandbag_info['pos']
+            cost = sandbag_info.get('cost', 2.0)
+            agent = sandbag_info.get('agent', None)
+            env_manager.add_sandbag(pos, cost, agent)
+    
+    return env_manager
+
+def validate_path(path, my_map, env_manager=None):
+    """
+    Validate that a path is feasible given the map and environment constraints
+    
+    Args:
+        path: List of positions [(row, col), ...]
+        my_map: Grid map
+        env_manager: Optional EnvironmentManager
+    
+    Returns:
+        bool: True if path is valid, False otherwise
+    """
+    if not path:
+        return False
+    
+    for i, pos in enumerate(path):
+        # Check bounds
+        if pos[0] < 0 or pos[0] >= len(my_map) or pos[1] < 0 or pos[1] >= len(my_map[0]):
+            return False
+        
+        # Check obstacles
+        if my_map[pos[0]][pos[1]]:
+            # If environment manager exists, check if it's a filled pit
+            if env_manager:
+                pit = env_manager.get_pit_at(pos)
+                if not (pit and pit.is_filled):
+                    return False
+            else:
+                return False
+        
+        # Check movement constraints (no diagonal moves)
+        if i > 0:
+            prev_pos = path[i-1]
+            distance = abs(pos[0] - prev_pos[0]) + abs(pos[1] - prev_pos[1])
+            if distance > 1:
+                return False
+    
+    return True
